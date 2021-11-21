@@ -40,13 +40,19 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
     """Using python's builtin pickle for making your bot persistent.
 
     Warning:
-        :class:`PicklePersistence` will try to replace :class:`telegram.Bot` instances by
-        :attr:`REPLACED_BOT` and insert the bot set with
-        :meth:`telegram.ext.BasePersistence.set_bot` upon loading of the data. This is to ensure
-        that changes to the bot apply to the saved objects, too. If you change the bots token, this
-        may lead to e.g. ``Chat not found`` errors. For the limitations on replacing bots see
-        :meth:`telegram.ext.BasePersistence.replace_bot` and
-        :meth:`telegram.ext.BasePersistence.insert_bot`.
+        By default, persistence will try to replace :class:`telegram.Bot` instances in your data by
+        :attr:`REPLACED_BOT` and insert the bot set with :meth:`set_bot` upon loading of the data.
+        This is to ensure that changes to the bot apply to the saved objects, too.
+
+        For the limitations on replacing bots see :meth:`replace_bot` and :meth:`insert_bot`.
+
+        This as also relevant for all objects from the :mod:`telegram` package that have shortcuts
+        to bot methods (e.g. :meth:`telegram.Message.reply_text`), since they contain a reference
+        to a :class:`telegram.Bot` object (see :meth:`telegram.TelegramObject.get_bot`).
+
+        Because this replacing & insertion needs to go through all your data, it may add
+        considerable overhead. If you data does not contain any references to :class:`telegram.Bot`
+        instances, you can deactivate this behavior via the ``replace_bots`` parameter.
 
     .. versionchanged:: 14.0
 
@@ -61,6 +67,11 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
         store_data (:class:`PersistenceInput`, optional): Specifies which kinds of data will be
             saved by this persistence instance. By default, all available kinds of data will be
             saved.
+        replace_bots (:class:`PersistenceInput`, optional): Specifies for which kinds of data
+            :meth:`replace_bot` and :meth:`insert_bot` will be called. By default, this is the case
+            for all available kinds of data.
+
+            .. versionadded:: 14.0
         single_file (:obj:`bool`, optional): When :obj:`False` will store 5 separate files of
             `filename_user_data`, `filename_bot_data`, `filename_chat_data`,
             `filename_callback_data` and `filename_conversations`. Default is :obj:`True`.
@@ -80,6 +91,10 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
             When :attr:`single_file` is :obj:`False` this will be used as a prefix.
         store_data (:class:`PersistenceInput`): Specifies which kinds of data will be saved by this
             persistence instance.
+        replace_bots (:class:`PersistenceInput`, optional): Specifies for which kinds of data
+            :meth:`replace_bot` and :meth:`insert_bot` will be called.
+
+            .. versionadded:: 14.0
         single_file (:obj:`bool`): Optional. When :obj:`False` will store 5 separate files of
             `filename_user_data`, `filename_bot_data`, `filename_chat_data`,
             `filename_callback_data` and `filename_conversations`. Default is :obj:`True`.
@@ -110,6 +125,7 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
         self: 'PicklePersistence[Dict, Dict, Dict]',
         filepath: FilePathInput,
         store_data: PersistenceInput = None,
+        replace_bots: PersistenceInput = None,
         single_file: bool = True,
         on_flush: bool = False,
     ):
@@ -120,6 +136,7 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
         self: 'PicklePersistence[UD, CD, BD]',
         filepath: FilePathInput,
         store_data: PersistenceInput = None,
+        replace_bots: PersistenceInput = None,
         single_file: bool = True,
         on_flush: bool = False,
         context_types: ContextTypes[Any, UD, CD, BD] = None,
@@ -130,11 +147,12 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
         self,
         filepath: FilePathInput,
         store_data: PersistenceInput = None,
+        replace_bots: PersistenceInput = None,
         single_file: bool = True,
         on_flush: bool = False,
         context_types: ContextTypes[Any, UD, CD, BD] = None,
     ):
-        super().__init__(store_data=store_data)
+        super().__init__(store_data=store_data, replace_bots=replace_bots)
         self.filepath = Path(filepath)
         self.single_file = single_file
         self.on_flush = on_flush

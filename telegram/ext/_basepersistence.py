@@ -82,11 +82,19 @@ class BasePersistence(Generic[UD, CD, BD], ABC):
     :meth:`refresh_bot_data`.
 
     Warning:
-        Persistence will try to replace :class:`telegram.Bot` instances by :attr:`REPLACED_BOT` and
-        insert the bot set with :meth:`set_bot` upon loading of the data. This is to ensure that
-        changes to the bot apply to the saved objects, too. If you change the bots token, this may
-        lead to e.g. ``Chat not found`` errors. For the limitations on replacing bots see
-        :meth:`replace_bot` and :meth:`insert_bot`.
+        By default, persistence will try to replace :class:`telegram.Bot` instances in your data by
+        :attr:`REPLACED_BOT` and insert the bot set with :meth:`set_bot` upon loading of the data.
+        This is to ensure that changes to the bot apply to the saved objects, too.
+
+        For the limitations on replacing bots see :meth:`replace_bot` and :meth:`insert_bot`.
+
+        This as also relevant for all objects from the :mod:`telegram` package that have shortcuts
+        to bot methods (e.g. :meth:`telegram.Message.reply_text`), since they contain a reference
+        to a :class:`telegram.Bot` object (see :meth:`telegram.TelegramObject.get_bot`).
+
+        Because this replacing & insertion needs to go through all your data, it may add
+        considerable overhead. If you data does not contain any references to :class:`telegram.Bot`
+        instances, you can deactivate this behavior via the ``replace_bots`` parameter.
 
     Note:
          :meth:`replace_bot` and :meth:`insert_bot` are used *independently* of the implementation
@@ -100,84 +108,95 @@ class BasePersistence(Generic[UD, CD, BD], ABC):
         store_data (:class:`PersistenceInput`, optional): Specifies which kinds of data will be
             saved by this persistence instance. By default, all available kinds of data will be
             saved.
+        replace_bots (:class:`PersistenceInput`, optional): Specifies for which kinds of data
+            :meth:`replace_bot` and :meth:`insert_bot` will be called. By default, this is the case
+            for all available kinds of data.
+
+            .. versionadded:: 14.0
 
     Attributes:
         store_data (:class:`PersistenceInput`): Specifies which kinds of data will be saved by this
             persistence instance.
+        replace_bots (:class:`PersistenceInput`, optional): Specifies for which kinds of data
+            :meth:`replace_bot` and :meth:`insert_bot` will be called.
+
+            .. versionadded:: 14.0
     """
 
     __slots__ = (
         'bot',
         'store_data',
-        '__dict__',  # __dict__ is included because we replace methods in the __new__
+        'replace_bots',
+        # __dict__ is included because we replace methods in __inject_replace_insert_bot
+        '__dict__',
     )
 
-    def __new__(
-        cls, *args: object, **kwargs: object  # pylint: disable=unused-argument
-    ) -> 'BasePersistence':
-        """This overrides the get_* and update_* methods to use insert/replace_bot.
-        That has the side effect that we always pass deepcopied data to those methods, so in
-        Pickle/DictPersistence we don't have to worry about copying the data again.
+    def __init__(self, store_data: PersistenceInput = None, replace_bots: PersistenceInput = None):
+        self.store_data = store_data or PersistenceInput()
+        self.replace_bots = replace_bots or PersistenceInput()
+        self.__inject_replace_insert_bot()
 
-        Note: This doesn't hold for second tuple-entry of callback_data. That's a Dict[str, str],
+        self.bot: Bot = None  # type: ignore[assignment]
+
+    def __inject_replace_insert_bot(self):
+        """This overrides the get_* and update_* methods to use insert/replace_bot.
+
+        Note: Depending on `self.replace_bots`, we pass the exact objects to the update_* methods,
+        so in Pickle/DictPersistence we need to make sure not to modify such data in place!
+
+        Note: The second tuple-entry of callback_data is never affected. That's a Dict[str, str],
         so no bots to replace anyway.
         """
-        instance = super().__new__(cls)
-        get_user_data = instance.get_user_data
-        get_chat_data = instance.get_chat_data
-        get_bot_data = instance.get_bot_data
-        get_callback_data = instance.get_callback_data
-        update_user_data = instance.update_user_data
-        update_chat_data = instance.update_chat_data
-        update_bot_data = instance.update_bot_data
-        update_callback_data = instance.update_callback_data
+        get_user_data = self.get_user_data
+        get_chat_data = self.get_chat_data
+        get_bot_data = self.get_bot_data
+        get_callback_data = self.get_callback_data
+        update_user_data = self.update_user_data
+        update_chat_data = self.update_chat_data
+        update_bot_data = self.update_bot_data
+        update_callback_data = self.update_callback_data
 
         def get_user_data_insert_bot() -> DefaultDict[int, UD]:
-            return instance.insert_bot(get_user_data())
+            return self.insert_bot(get_user_data())
 
         def get_chat_data_insert_bot() -> DefaultDict[int, CD]:
-            return instance.insert_bot(get_chat_data())
+            return self.insert_bot(get_chat_data())
 
         def get_bot_data_insert_bot() -> BD:
-            return instance.insert_bot(get_bot_data())
+            return self.insert_bot(get_bot_data())
 
         def get_callback_data_insert_bot() -> Optional[CDCData]:
             cdc_data = get_callback_data()
             if cdc_data is None:
                 return None
-            return instance.insert_bot(cdc_data[0]), cdc_data[1]
+            return self.insert_bot(cdc_data[0]), cdc_data[1]
 
         def update_user_data_replace_bot(user_id: int, data: UD) -> None:
-            return update_user_data(user_id, instance.replace_bot(data))
+            return update_user_data(user_id, self.replace_bot(data))
 
         def update_chat_data_replace_bot(chat_id: int, data: CD) -> None:
-            return update_chat_data(chat_id, instance.replace_bot(data))
+            return update_chat_data(chat_id, self.replace_bot(data))
 
         def update_bot_data_replace_bot(data: BD) -> None:
-            return update_bot_data(instance.replace_bot(data))
+            return update_bot_data(self.replace_bot(data))
 
         def update_callback_data_replace_bot(data: CDCData) -> None:
             obj_data, queue = data
-            return update_callback_data((instance.replace_bot(obj_data), queue))
+            return update_callback_data((self.replace_bot(obj_data), queue))
 
         # Adds to __dict__
-        setattr(instance, 'get_user_data', get_user_data_insert_bot)
-        setattr(instance, 'get_chat_data', get_chat_data_insert_bot)
-        setattr(instance, 'get_bot_data', get_bot_data_insert_bot)
-        setattr(instance, 'get_callback_data', get_callback_data_insert_bot)
-        setattr(instance, 'update_user_data', update_user_data_replace_bot)
-        setattr(instance, 'update_chat_data', update_chat_data_replace_bot)
-        setattr(instance, 'update_bot_data', update_bot_data_replace_bot)
-        setattr(instance, 'update_callback_data', update_callback_data_replace_bot)
-        return instance
-
-    def __init__(
-        self,
-        store_data: PersistenceInput = None,
-    ):
-        self.store_data = store_data or PersistenceInput()
-
-        self.bot: Bot = None  # type: ignore[assignment]
+        if self.replace_bots.bot_data:
+            self.get_bot_data = get_bot_data_insert_bot
+            self.update_bot_data = update_bot_data_replace_bot
+        if self.replace_bots.chat_data:
+            self.get_chat_data = get_chat_data_insert_bot
+            self.update_chat_data = update_chat_data_replace_bot
+        if self.replace_bots.user_data:
+            self.get_user_data = get_user_data_insert_bot
+            self.update_user_data = update_user_data_replace_bot
+        if self.replace_bots.callback_data:
+            self.get_callback_data = get_callback_data_insert_bot
+            self.update_callback_data = update_callback_data_replace_bot
 
     def set_bot(self, bot: Bot) -> None:
         """Set the Bot to be used by this persistence instance.

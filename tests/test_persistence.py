@@ -112,7 +112,7 @@ class OwnPersistence(BasePersistence):
         raise NotImplementedError
 
     def flush(self):
-        raise NotImplementedError
+        pass
 
 
 @pytest.fixture(scope="function")
@@ -120,60 +120,61 @@ def base_persistence():
     return OwnPersistence()
 
 
+class BotPersistence(BasePersistence):
+    __slots__ = ()
+
+    def __init__(self, replace_bots=None):
+        super().__init__(replace_bots=replace_bots)
+        self.bot_data = None
+        self.chat_data = defaultdict(dict)
+        self.user_data = defaultdict(dict)
+        self.callback_data = None
+
+    def get_bot_data(self):
+        return self.bot_data
+
+    def get_chat_data(self):
+        return self.chat_data
+
+    def get_user_data(self):
+        return self.user_data
+
+    def get_callback_data(self):
+        return self.callback_data
+
+    def get_conversations(self, name):
+        raise NotImplementedError
+
+    def update_bot_data(self, data):
+        self.bot_data = data
+
+    def update_chat_data(self, chat_id, data):
+        self.chat_data[chat_id] = data
+
+    def update_user_data(self, user_id, data):
+        self.user_data[user_id] = data
+
+    def update_callback_data(self, data):
+        self.callback_data = data
+
+    def update_conversation(self, name, key, new_state):
+        raise NotImplementedError
+
+    def refresh_user_data(self, user_id, user_data):
+        pass
+
+    def refresh_chat_data(self, chat_id, chat_data):
+        pass
+
+    def refresh_bot_data(self, bot_data):
+        pass
+
+    def flush(self):
+        pass
+
+
 @pytest.fixture(scope="function")
 def bot_persistence():
-    class BotPersistence(BasePersistence):
-        __slots__ = ()
-
-        def __init__(self):
-            super().__init__()
-            self.bot_data = None
-            self.chat_data = defaultdict(dict)
-            self.user_data = defaultdict(dict)
-            self.callback_data = None
-
-        def get_bot_data(self):
-            return self.bot_data
-
-        def get_chat_data(self):
-            return self.chat_data
-
-        def get_user_data(self):
-            return self.user_data
-
-        def get_callback_data(self):
-            return self.callback_data
-
-        def get_conversations(self, name):
-            raise NotImplementedError
-
-        def update_bot_data(self, data):
-            self.bot_data = data
-
-        def update_chat_data(self, chat_id, data):
-            self.chat_data[chat_id] = data
-
-        def update_user_data(self, user_id, data):
-            self.user_data[user_id] = data
-
-        def update_callback_data(self, data):
-            self.callback_data = data
-
-        def update_conversation(self, name, key, new_state):
-            raise NotImplementedError
-
-        def refresh_user_data(self, user_id, user_data):
-            pass
-
-        def refresh_chat_data(self, chat_id, chat_data):
-            pass
-
-        def refresh_bot_data(self, bot_data):
-            pass
-
-        def flush(self):
-            pass
-
     return BotPersistence()
 
 
@@ -861,6 +862,46 @@ class TestBasePersistence:
         persistence.update_bot_data(data)
         assert make_assertion(persistence.bot_data)
         assert make_assertion(persistence.get_bot_data())
+
+    @pytest.mark.parametrize('name', ['bot_data', 'chat_data', 'user_data', 'callback_data'])
+    def test_replace_insert_bot_selective(self, name, bot):
+        print(PersistenceInput(**{name: False}))
+        persistence = BotPersistence(replace_bots=PersistenceInput(**{name: False}))
+        persistence.set_bot(bot)
+
+        persistence.update_bot_data(bot)
+        persistence.update_chat_data(1, bot)
+        persistence.update_user_data(1, bot)
+        persistence.update_callback_data((bot, 1))
+
+        assert persistence.bot_data == (bot if name == 'bot_data' else persistence.REPLACED_BOT)
+        assert persistence.chat_data[1] == (
+            bot if name == 'chat_data' else persistence.REPLACED_BOT
+        )
+        assert persistence.user_data[1] == (
+            bot if name == 'user_data' else persistence.REPLACED_BOT
+        )
+        assert persistence.callback_data == (
+            (bot if name == 'callback_data' else persistence.REPLACED_BOT, 1)
+        )
+
+        persistence.update_bot_data(persistence.REPLACED_BOT)
+        persistence.update_chat_data(1, persistence.REPLACED_BOT)
+        persistence.update_user_data(1, persistence.REPLACED_BOT)
+        persistence.update_callback_data((persistence.REPLACED_BOT, 1))
+
+        assert persistence.get_bot_data() == (
+            persistence.REPLACED_BOT if name == 'bot_data' else bot
+        )
+        assert persistence.get_chat_data() == (
+            {1: persistence.REPLACED_BOT if name == 'chat_data' else bot}
+        )
+        assert persistence.get_user_data() == (
+            {1: persistence.REPLACED_BOT if name == 'user_data' else bot}
+        )
+        assert persistence.get_callback_data() == (
+            (persistence.REPLACED_BOT if name == 'callback_data' else bot, 1)
+        )
 
     def test_set_bot_exception(self, bot):
         non_ext_bot = Bot(bot.token)
