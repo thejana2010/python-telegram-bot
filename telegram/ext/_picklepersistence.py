@@ -19,6 +19,7 @@
 """This module contains the PicklePersistence class."""
 import pickle
 from collections import defaultdict
+from copy import deepcopy
 from pathlib import Path
 from typing import (
     Any,
@@ -28,12 +29,15 @@ from typing import (
     overload,
     cast,
     DefaultDict,
+    TypeVar,
 )
 
 from telegram._utils.types import FilePathInput
 from telegram.ext import BasePersistence, PersistenceInput
 from telegram.ext._contexttypes import ContextTypes
 from telegram.ext._utils.types import UD, CD, BD, ConversationDict, CDCData
+
+T = TypeVar('T')
 
 
 class PicklePersistence(BasePersistence[UD, CD, BD]):
@@ -163,6 +167,16 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
         self.conversations: Optional[Dict[str, Dict[Tuple, object]]] = None
         self.context_types = cast(ContextTypes[Any, UD, CD, BD], context_types or ContextTypes())
 
+    @staticmethod
+    def _copy(data: T, replace_bot: bool) -> T:
+        """Call this to make sure to get an actual copy of the data, i.e. changes to another
+        reference of the data don't change the copy. We use deepcopy for that.
+        If replace/insert_bot is called for the data by BasePersistence, that essentially
+        deep-copies already, so we can just return the data."""
+        if replace_bot:
+            return data
+        return deepcopy(data)
+
     def _load_singlefile(self) -> None:
         try:
             with self.filepath.open("rb") as file:
@@ -231,7 +245,9 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
             self.user_data = data
         else:
             self._load_singlefile()
-        return self.user_data  # type: ignore[return-value]
+        return self._copy(  # type: ignore[return-value]
+            self.user_data, self.replace_bots.user_data
+        )
 
     def get_chat_data(self) -> DefaultDict[int, CD]:
         """Returns the chat_data from the pickle file if it exists or an empty :obj:`defaultdict`.
@@ -251,7 +267,9 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
             self.chat_data = data
         else:
             self._load_singlefile()
-        return self.chat_data  # type: ignore[return-value]
+        return self._copy(  # type: ignore[return-value]
+            self.chat_data, self.replace_bots.chat_data
+        )
 
     def get_bot_data(self) -> BD:
         """Returns the bot_data from the pickle file if it exists or an empty object of type
@@ -269,7 +287,7 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
             self.bot_data = data
         else:
             self._load_singlefile()
-        return self.bot_data  # type: ignore[return-value]
+        return self._copy(self.bot_data, self.replace_bots.bot_data)  # type: ignore[return-value]
 
     def get_callback_data(self) -> Optional[CDCData]:
         """Returns the callback data from the pickle file if it exists or :obj:`None`.
@@ -292,7 +310,10 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
             self._load_singlefile()
         if self.callback_data is None:
             return None
-        return self.callback_data[0], self.callback_data[1].copy()
+        return (
+            self._copy(self.callback_data[0], self.replace_bots.callback_data),
+            self.callback_data[1].copy(),
+        )
 
     def get_conversations(self, name: str) -> ConversationDict:
         """Returns the conversations from the pickle file if it exists or an empty dict.
@@ -348,7 +369,7 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
             self.user_data = defaultdict(self.context_types.user_data)
         if self.user_data.get(user_id) == data:
             return
-        self.user_data[user_id] = data
+        self.user_data[user_id] = self._copy(data, self.replace_bots.user_data)
         if not self.on_flush:
             if not self.single_file:
                 self._dump_file(Path(f"{self.filepath}_user_data"), self.user_data)
@@ -365,7 +386,7 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
         """
         if self.chat_data is None:
             self.chat_data = defaultdict(self.context_types.chat_data)
-        if self.chat_data.get(chat_id) == data:
+        if self.chat_data.get(chat_id) == self._copy(data, self.replace_bots.chat_data):
             return
         self.chat_data[chat_id] = data
         if not self.on_flush:
@@ -383,7 +404,7 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
         """
         if self.bot_data == data:
             return
-        self.bot_data = data
+        self.bot_data = self._copy(data, self.replace_bots.bot_data)
         if not self.on_flush:
             if not self.single_file:
                 self._dump_file(Path(f"{self.filepath}_bot_data"), self.bot_data)
@@ -403,7 +424,7 @@ class PicklePersistence(BasePersistence[UD, CD, BD]):
         """
         if self.callback_data == data:
             return
-        self.callback_data = (data[0], data[1].copy())
+        self.callback_data = (self._copy(data[0], self.replace_bots.callback_data), data[1].copy())
         if not self.on_flush:
             if not self.single_file:
                 self._dump_file(Path(f"{self.filepath}_callback_data"), self.callback_data)
